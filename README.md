@@ -29,6 +29,49 @@ curl http://localhost:8080/v1/chat/completions \
 
 For streaming, add `"stream":true` and use `curl -N`.
 
+## Interactive terminal chat with llm
+
+[LLM](https://llm.datasette.io/en/stable/usage.html#starting-an-interactive-chat)
+provides a simple interactive chat that keeps conversation history. With
+[uv](https://docs.astral.sh/uv/getting-started/installation/) installed, install
+the client on your host:
+
+```sh
+uv tool install llm
+```
+
+If uv reports that its executable directory is missing from `PATH`, run
+`uv tool update-shell` and open a new terminal.
+
+Start the Eliza container using the commands above, then open another terminal.
+Find LLM's configuration directory:
+
+```sh
+dirname "$(llm logs path)"
+```
+
+Create `extra-openai-models.yaml` in that directory, or append this entry to an
+existing file:
+
+```yaml
+- model_id: eliza
+  model_name: eliza
+  api_base: http://localhost:8080/v1
+```
+
+This uses LLM's built-in support for
+[OpenAI-compatible endpoints](https://llm.datasette.io/en/stable/other-models.html#configure-an-openai-compatible-model).
+With the default unauthenticated Eliza configuration, no API key is needed.
+Start chatting:
+
+```sh
+llm chat -m eliza
+```
+
+For example, enter `my bicycle is blue`, then `zzzxxy` to exercise Eliza's memory
+recall. The client resends the conversation history automatically. Type `quit`
+or `exit` to leave; `llm chat -c` resumes your most recent conversation.
+
 ## OpenAI Python client and conversations
 
 Point your client's base URL at `http://localhost:8080/v1`, and select model
