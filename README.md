@@ -15,8 +15,9 @@ make build
 docker run --rm -p 127.0.0.1:8080:8080 eliza-openai:local
 ```
 
-The container runs as UID/GID `10001:10001`, listens on port 8080, and includes
-a health check. It also supports `--read-only --tmpfs /tmp`. Runtime packages
+The container defaults to UID/GID `10001:0`, supports arbitrary non-root UIDs,
+listens on port 8080, and includes a health check. It also supports
+`--read-only --tmpfs /tmp`. Runtime packages
 are installed without recommendations; Python and the OpenAI SDK are only in
 the separate test image.
 
@@ -117,6 +118,65 @@ promised to preserve wording.
 Set variables with Docker's `-e` or `--env-file`. No real OpenAI key is needed.
 The service logs to stderr without logging conversation bodies.
 
+## OpenShift
+
+The image supports OpenShift-assigned UIDs, including UIDs without an
+`/etc/passwd` entry. Application files are readable but not writable; `HOME` and
+`TMPDIR` point to `/tmp`. Startup requires no root privileges, capabilities,
+passwd-file changes, or writable application directory.
+
+Let OpenShift assign the UID and volume groups: do not set `runAsUser`,
+`runAsGroup`, or `fsGroup` to the image's default IDs in your Deployment.
+The following pod-spec example uses settings compatible with
+[OpenShift's restricted-v2 SCC](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/authentication_and_authorization/managing-pod-security-policies).
+Replace the image reference with your pushed image, preferably pinned by digest:
+
+```yaml
+# Under spec.template.spec in a Deployment:
+automountServiceAccountToken: false
+securityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+containers:
+  - name: eliza
+    image: your-registry/your-project/eliza-openai:your-tag
+    ports:
+      - name: http
+        containerPort: 8080
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: [ALL]
+    volumeMounts:
+      - name: tmp
+        mountPath: /tmp
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: http
+    livenessProbe:
+      httpGet:
+        path: /healthz
+        port: http
+      initialDelaySeconds: 5
+volumes:
+  - name: tmp
+    emptyDir:
+      sizeLimit: 16Mi
+```
+
+The `/tmp` volume permits temporary request-body storage with a read-only root
+filesystem. Point your Service's `targetPort` at `http` (8080). Kubernetes uses
+the probes above rather than the Dockerfile's `HEALTHCHECK`. If authentication
+is desired, supply `ELIZA_API_KEY` from a Secret; health probes need no key.
+
+`make test` checks the image under Docker with arbitrary UIDs, dropped
+capabilities, no privilege escalation, and a read-only root filesystem. These
+checks do not replace validation against your cluster's SCC and SELinux policy;
+no live OpenShift deployment has been tested here.
+
 ## Tests
 
 ```sh
@@ -129,8 +189,11 @@ OpenAI Python SDK. It covers JSON and streaming, UTF-8, memory recall, isolation
 concurrency, authentication, validation, limits, and exact transcript equality
 after a container restart. The Perl tests compare every replayed turn's reply,
 memory, reply counters, and RNG state with one continuously alive instance, and
-compare fresh interpreters with different hash seeds. Tests also check non-root
-execution and print the runtime image size. Containers, network, result volume,
+compare fresh interpreters with different hash seeds. The HTTP suite runs before
+and after restart under a random UID with group 0, then after replacing the
+container with another random UID and a nonzero group. It also checks the default
+UID, temporary-file access, large request-body storage, dropped capabilities, and
+no privilege escalation, and prints the runtime image size. Containers, network, result volume,
 and temporary image tags are cleaned up; build caches remain for later runs.
 
 For local Perl tests, install `libchatbot-eliza-perl` and `libmojolicious-perl`,

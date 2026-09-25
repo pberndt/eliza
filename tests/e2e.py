@@ -124,6 +124,14 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("error", response.json())
 
+    def test_large_request_with_temporary_body_storage(self):
+        # Exceeds Mojo's default in-memory body threshold, but stays within our
+        # request limit. The ignored system text avoids an expensive Eliza turn.
+        messages = [{"role": "system", "content": "x" * 524288},
+                    {"role": "user", "content": "hello"}]
+        expected = self.completion(messages[-1:]).choices[0].message.content
+        self.assertEqual(self.completion(messages).choices[0].message.content, expected)
+
     def test_replay_concurrency_and_restart(self):
         snapshots = []
         for seed in (1, 42, 2147483646):

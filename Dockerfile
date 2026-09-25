@@ -5,8 +5,13 @@ RUN apt-get update \
 WORKDIR /app
 COPY lib/ lib/
 COPY bin/ bin/
-ENV MOJO_MODE=production
-USER 10001:10001
+# Application code is read-only and accessible to any OpenShift-assigned UID,
+# regardless of the permissions in the build checkout. Only /tmp is writable.
+RUN chmod -R a=rX /app
+ENV MOJO_MODE=production \
+    HOME=/tmp \
+    TMPDIR=/tmp
+USER 10001:0
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD ["perl", "-MMojo::UserAgent", "-e", "exit(Mojo::UserAgent->new->request_timeout(2)->get('http://127.0.0.1:8080/healthz')->result->is_success ? 0 : 1)"]
