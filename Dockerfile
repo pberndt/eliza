@@ -1,5 +1,6 @@
 FROM debian:trixie-slim AS base
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libchatbot-eliza-perl libmojolicious-perl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
