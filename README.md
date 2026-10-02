@@ -72,6 +72,65 @@ For example, enter `my bicycle is blue`, then `zzzxxy` to exercise Eliza's memor
 recall. The client resends the conversation history automatically. Type `quit`
 or `exit` to leave; `llm chat -c` resumes your most recent conversation.
 
+## Transport only the layers above Debian
+
+If the target Docker server already has the same `debian:trixie-slim` base,
+`tools/image_delta.py` creates a compressed bundle containing only the additional
+layers and the image configuration. The target reconstructs a complete archive
+using its local base, then loads it normally. No registry or network connection
+is needed during reconstruction. The helper requires Python 3.9+ and uses only
+the standard library; it does not invoke Docker itself.
+
+On the build machine, export one platform of each image:
+
+```sh
+docker save -o base.tar debian:trixie-slim
+docker save -o eliza-full.tar eliza-openai:local
+python3 tools/image_delta.py export \
+  --base base.tar --image eliza-full.tar --output eliza-delta.tar.gz
+```
+
+If BuildKit cached the base without adding it to `docker image ls`, pull the
+exact base digest used by the build before saving it. You can pass a locally
+available digest reference to `docker save` instead of a tag. The helper checks
+that the base's ordered layer hashes are a prefix of the application image's;
+having the same mutable tag name on both machines is not sufficient. For a
+multi-platform image store, select one matching platform with
+`docker save --platform linux/amd64 ...` (or your target platform).
+
+Copy only **`eliza-delta.tar.gz` and `tools/image_delta.py`** across the expensive
+link. Keep the printed source `image_id` for comparison. On the target:
+
+```sh
+docker save -o base.tar debian:trixie-slim
+python3 image_delta.py assemble \
+  --base base.tar --delta eliza-delta.tar.gz --output eliza-reassembled.tar
+docker load -i eliza-reassembled.tar
+docker image inspect eliza-openai:local --format '{{.Id}}'
+```
+
+The loaded image ID must equal the ID printed by `export`. The original tags,
+entrypoint, environment, container user, and health check are preserved. Use
+`assemble --tag eliza-openai:transported ...` to replace the archive's tags
+without changing the image ID. `docker load` updates those tags if they already
+exist on the target.
+
+The helper validates the platform and uncompressed layer hashes (DiffIDs), so
+the base and application archives can use different layer filenames or gzip
+compression. It preserves layer tar contents, including whiteouts and file
+ownership, without extracting their files. Wrong bases, corrupt payloads,
+missing layers, and existing output paths are rejected; failed operations leave
+no partial output archive. The delta itself is a helper-specific bundle, not
+an archive to pass directly to `docker load`.
+
+Supported inputs are single-image Docker save archives with `manifest.json`,
+including Docker saves containing OCI-style blob paths. Plain and gzip layer
+payloads are supported; OCI-only archives and other layer compression formats
+are rejected explicitly. Both machines need disk space for the local archives,
+and the helper temporarily spools one uncompressed layer at a time. The
+dependency installation layer is still transferred; only the base layers are
+omitted. Full archives never need to cross the link.
+
 ## OpenAI Python client and conversations
 
 Point your client's base URL at `http://localhost:8080/v1`, and select model
@@ -226,8 +285,10 @@ no live OpenShift deployment has been tested here.
 make test
 ```
 
-Requires Docker and Bash on the host. The test builds all images, runs the Perl
-tests, and exercises the runtime over an isolated Docker network using a pinned
+Requires Docker and Bash on the host. The test pulls the Debian base, builds all
+images, runs the Perl and Python archive tests, then exports and reconstructs the
+runtime through a delta bundle. It verifies the image ID and exercises that
+reconstructed image over an isolated Docker network using a pinned
 OpenAI Python SDK. It covers JSON and streaming, UTF-8, memory recall, isolation,
 concurrency, authentication, validation, limits, and exact transcript equality
 after a container restart. The Perl tests compare every replayed turn's reply,
@@ -237,7 +298,17 @@ and after restart under a random UID with group 0, then after replacing the
 container with another random UID and a nonzero group. It also checks the default
 UID, temporary-file access, large request-body storage, dropped capabilities, and
 no privilege escalation, and prints the runtime image size. Containers, network, result volume,
-and temporary image tags are cleaned up; build caches remain for later runs.
+temporary image tags, and temporary archives are cleaned up; the Debian base
+and build caches remain for later runs.
 
-For local Perl tests, install `libchatbot-eliza-perl` and `libmojolicious-perl`,
-then run `make test-unit`. `make build IMAGE=your-tag` sets the runtime image tag.
+`make test-isolated-import` additionally loads the reconstructed archive in a
+disposable Docker daemon initially containing only the base image, verifies its
+image ID, and runs memory-replay and streaming smoke tests. This check needs
+permission to run a privileged `docker:29-dind` container; no host Docker socket
+or host filesystem is mounted into it. Its container and anonymous data volume
+are removed afterward. The regular suite does not require privileged containers.
+
+For local tests, install `libchatbot-eliza-perl`, `libmojolicious-perl`, and
+Python 3.9+, then run `make test-unit`. The archive tests need only Python:
+`python3 -m unittest discover -s tests -p test_image_delta.py -v`.
+`make build IMAGE=your-tag` sets the runtime image tag.
